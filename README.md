@@ -1,7 +1,7 @@
-## This project is based on ansible for installing an on-premise Kubernetes cluster all in once.
-## For api server high availability haproxy and keepalived are also installed.
-## Ingress (nginx and istio based), metallb are also installed.
-## You have to make necessary changes (set IPs, registry location etc.) inside allvars.yaml and ansible_hosts files before installation
+# This project is based on ansible for installing an on-premise Kubernetes cluster all in once.
+# For api server high availability haproxy and keepalived are also installed.
+# Ingress (nginx and istio based), metallb are also installed.
+# You have to make necessary changes (set IPs, registry location etc.) inside allvars.yaml and ansible_hosts files before installation
 
 # For running remote tasks on servers, we use the password assigned to the variable ansible_become_pass
 # We use vault in order to keep the password encrypted assigned to the variable ansible_become_pass
@@ -25,6 +25,7 @@ ansible-playbook kubernetes_cluster_install.yaml -k --ask-vault-pass -vv --tags 
 
 # 'FORCE_KUBE_INSTALL=1' parameter is defined by us in order to force the installation to a previously installed kubernetes cluster.
 # We also have some more checks other than this parameter.
+
 
 # !!!!!!!!!!!!!!!!!!!!!!!!! IMPORTANT NOTES !!!!!!!!!!!!!!!!!!!!!!!!!!!
 # 1-)
