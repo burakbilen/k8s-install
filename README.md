@@ -28,6 +28,6 @@ We also have some more checks other than this parameter.
 **IMPORTANT NOTES**
 - Some of the dashboard components are not installed (seems a bug in ansible) when you run the ansible playbook first time.
   In order to overcome this issue it may be necessary to run the single task again using the task's tag.  
-  * ansible-playbook kubernetes_cluster_install.yaml -k --ask-vault-pass -vv --tags "install_kubernetes_dashboard" --extra-vars 'FORCE_KUBE_INSTALL=1' -i ansible_hosts
+  * **ansible-playbook kubernetes_cluster_install.yaml -k --ask-vault-pass -vv --tags "install_kubernetes_dashboard" --extra-vars 'FORCE_KUBE_INSTALL=1' -i ansible_hosts**
 
 - The output of kubeadm init and the dashboard token are written to the files .kubeadm_init_output.txt and .dashboard_admin_token.txt respectively in the master server's home directory
