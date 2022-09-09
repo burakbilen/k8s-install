@@ -28,7 +28,6 @@ In order to run a particular task run the below command
 
 
 ** IMPORTANT NOTES ****
-
 - Some of the dashboard components are not installed (seems a bug in ansible) when you run the ansible playbook first time.
   In order to overcome this issue it may be necessary to run the single task again using the task's tag.
   
