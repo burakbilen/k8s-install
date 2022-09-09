@@ -1,13 +1,13 @@
 This project is based on ansible for installing an on-premise Kubernetes cluster all in once.
 For api server high availability haproxy and keepalived are also installed.
 Ingress (nginx and istio based), metallb are also installed.
-You have to make necessary changes (set IPs, registry location etc.) inside allvars.yaml and ansible_hosts files before installation
+You have to make necessary changes (set IPs, registry location etc.) inside allvars.yaml and ansible_hosts files before installation.
 
-For running remote tasks on servers, we use the password assigned to the variable ansible_become_pass
-We use vault in order to keep the password encrypted assigned to the variable ansible_become_pass
+For running remote tasks on servers, we use the password assigned to the variable ansible_become_pass.
+We use vault in order to keep the password encrypted assigned to the variable ansible_become_pass.
 With the below command, we can encrypt the password, using the password in a_password_file file.
-We write the password of the user which we use to connect to the servers using ssh, in a_password_file 
-After generating the encrypted password and adding it to the bottom of the allvars.yaml file we can safely delete the a_password_file
+We write the password of the user which we use to connect to the servers using ssh, in a_password_file. 
+After generating the encrypted password and adding it to the bottom of the allvars.yaml file we can safely delete the a_password_file.
 
 paste the output of the below command to the bottom of the allvars.yaml file 
 * **ansible-vault encrypt_string --vault-password-file a_password_file 'write here the password of the ssh user used to connect to the servers' --name 'ansible_become_pass'**
