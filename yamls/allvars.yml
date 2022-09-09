@@ -1,0 +1,66 @@
+kube_registry: kuberegistry.local
+kube_registry_service_user: registryuser
+kube_registry_service_password: registryuserpassword
+# if your servers are behind proxy
+proxy_server: 172.5.10.245
+proxy_port: 3128
+proxy_env:
+  http_proxy: "http://{{ proxy_server }}:{{ proxy_port }}"
+  https_proxy: "http://{{ proxy_server }}:{{ proxy_port }}"
+  no_proxy: "127.0.0.1,localhost"
+  HTTP_PROXY: "http://{{ proxy_server }}:{{ proxy_port }}"
+  HTTPS_PROXY: "http://{{ proxy_server }}:{{ proxy_port }}"
+  NO_PROXY: "127.0.0.1,localhost"
+api_servers: ['kubetestm1.local', 'kubetestm2.local', 'kubetestm3.local']
+api_server_port: 6443
+haproxy_bind: 6444
+### container images
+pause_image: "{{ kube_registry }}/k8sdeploy/pause:3.6"
+haproxy_image: "{{ kube_registry }}/k8sdeploy/haproxy:2.4.1"
+keepalived_image: "{{ kube_registry }}/k8sdeploy/keepalived"
+calico_image: "{{ kube_registry }}/k8sdeploy/"
+istio_registry: "{{ kube_registry }}/k8sdeploy/istio"
+tigera_image: "{{ kube_registry }}/k8sdeploy/tigera/operator:v1.27.1"
+metallb_speaker_image: "{{ kube_registry }}/k8sdeploy/metallb/speaker:v0.12.1"
+metallb_controller_image: "{{ kube_registry }}/k8sdeploy/metallb/controller:v0.12.1"
+dashboard_image: "{{ kube_registry }}/k8sdeploy/kubernetesui/dashboard:v2.5.1"
+metrics_scraper_image: "{{ kube_registry }}/k8sdeploy/kubernetesui/metrics-scraper:v1.0.7"
+metrics_server_image: "{{ kube_registry }}/k8sdeploy/metrics-server/metrics-server:v0.5.2"
+ingress_controller_image: "{{ kube_registry }}/k8sdeploy/ingress-nginx/controller:v1.1.1"
+ingress_kube_webhook_image: "{{ kube_registry }}/k8sdeploy/ingress-nginx/kube-webhook-certgen:v1.1.1"
+###
+keepalived_virtual_ipaddress: 172.5.12.22
+ingress_loadbalancer_ipaddress: 172.5.12.21
+istio_loadbalancer_ipaddress: 172.5.12.23
+docker_base_address: 172.32.1.0/24
+control_plane_endpoint_root: "apiserver.local"
+control_plane_endpoint: "{{ control_plane_endpoint_root }}:{{ haproxy_bind }}"
+kubernetes_version: v1.23.7
+kube_package_version: 1.23.7-00
+containerd_package_version: 1.6.4-1
+docker_package_version: "5:20.10.16~3-0~ubuntu-focal"
+docker_scanplugin_version: "0.17.0~ubuntu-focal"
+docker_composeplugin_version: "2.5.0~ubuntu-focal"
+istio_version: 1.14.1
+service_node_port_range: 1-65535
+bind_address: 0.0.0.0
+pod_subnet: 10.5.5.0/24
+service_subnet: 10.5.6.0/24
+image_repository: "{{ kube_registry }}/k8sdeploy"
+cri_socket: "/run/containerd/containerd.sock"
+api_server_endpoint: "{{ control_plane_endpoint }}" 
+calico_interface: "ens.*"
+metallb_ippool: ['172.5.12.21/32', '172.5.12.23/32'] 
+token: ""
+discovery_token_ca_cert_hash: ""
+control_plane_certificate_key: ""
+
+dashboard_dns: "kubedashboard.local"
+
+ansible_become_pass: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          67646464646455388381366163626566616339353765663662383665393939653361636337343135
+          3425354452887376364535424238396562636230353162320a326632643463353335646666656236
+          97954597593750290265626823682450097464656474888744646337366634376261343837636461
+          38739274365659707723694677988635633538376365346133346231306264613337336633363866
+          3545

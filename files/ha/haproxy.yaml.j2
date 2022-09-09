@@ -1,0 +1,61 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: haproxy
+  namespace: kube-system
+spec:
+  containers:
+  - name: haproxy
+    image: {{ haproxy_image }}
+    imagePullPolicy: IfNotPresent
+    securityContext:
+      runAsUser: 0
+    resources:
+      requests:
+        cpu: "0.15"
+        memory: "100Mi"
+      limits:
+        cpu: "0.25"
+        memory: "200Mi"
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      set -e
+      cat <<EOF | tee /usr/local/etc/haproxy/haproxy.cfg > /dev/null
+      global
+        log stdout format raw local0
+
+      defaults
+        balance roundrobin
+        default-server check ca-file /etc/kubernetes/pki/ca.crt
+        http-check connect default ssl
+        http-check expect status 200
+        http-check send meth GET uri /healthz
+        log global
+        mode tcp
+        option dontlognull
+        option log-health-checks
+        option redispatch
+        option tcplog
+        timeout connect 1000ms
+
+      listen api_server
+        bind :{{ haproxy_bind }}
+        {% for myserver in api_servers -%} 
+        server api-server-{{ loop.index }} {{ myserver }}:{{ api_server_port }}
+        {% endfor %}{{''}}
+      EOF
+
+      exec docker-entrypoint.sh haproxy -d -f /usr/local/etc/haproxy/haproxy.cfg
+    volumeMounts:
+    - name: etc-kubernetes-pki
+      mountPath: /etc/kubernetes/pki
+      readOnly: true
+  volumes:
+  - name: etc-kubernetes-pki
+    hostPath:
+      path: /etc/kubernetes/pki
+      type: ""
+  hostNetwork: true
+  priorityClassName: system-node-critical
+

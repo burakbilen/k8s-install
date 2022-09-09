@@ -1,0 +1,8 @@
+{% set excluded_hosts = "127.0.0.1,localhost," ~ service_subnet ~ "," ~ pod_subnet ~ "," ~ control_plane_endpoint_root %}
+{% set excluded_hosts = excluded_hosts ~ "," ~ play_hosts|join(",") %}
+export http_proxy="http://{{ proxy_server }}:{{ proxy_port }}"
+export https_proxy="http://{{ proxy_server }}:{{ proxy_port }}"
+export no_proxy="{{ excluded_hosts }}"
+export HTTP_PROXY="http://{{ proxy_server }}:{{ proxy_port }}"
+export HTTPS_PROXY="http://{{ proxy_server }}:{{ proxy_port }}"
+export NO_PROXY="{{ excluded_hosts }}"

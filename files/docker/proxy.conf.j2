@@ -1,0 +1,11 @@
+{% set excluded_hosts = "127.0.0.1,localhost," ~ service_subnet ~ "," ~ pod_subnet %}
+{% set excluded_hosts = excluded_hosts ~ "," ~ play_hosts|join(",") %}
+
+[Service]
+Environment="http_proxy=http://{{ proxy_server }}:{{ proxy_port }}"
+Environment="https_proxy=http://{{ proxy_server }}:{{ proxy_port }}"
+Environment="no_proxy={{ excluded_hosts }}"
+
+Environment="HTTP_PROXY=http://{{ proxy_server }}:{{ proxy_port }}"
+Environment="HTTPS_PROXY=http://{{ proxy_server }}:{{ proxy_port }}"
+Environment="NO_PROXY={{ excluded_hosts }}"

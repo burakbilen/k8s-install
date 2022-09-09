@@ -1,0 +1,75 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: keepalived
+  namespace: kube-system
+spec:
+  containers:
+  - name: keepalived
+    image: {{ keepalived_image }}
+    imagePullPolicy: IfNotPresent
+    securityContext:
+      privileged: true
+    resources:
+      requests:
+        cpu: "0.15"
+        memory: "100Mi"
+      limits:
+        cpu: "0.25"
+        memory: "200Mi"
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      set -e
+      modprobe ip_vs
+      cat <<EOF | tee /etc/keepalived/keepalived.conf > /dev/null
+      global_defs {
+        script_user root
+        enable_script_security
+        vrrp_garp_master_delay 5
+        vrrp_garp_master_repeat 5
+        vrrp_garp_lower_prio_delay 5
+        vrrp_garp_lower_prio_repeat 5
+        vrrp_garp_master_refresh 5
+        vrrp_garp_master_refresh_repeat 5
+        vrrp_garp_interval 5
+        vrrp_gna_interval 5
+      }
+
+      vrrp_script check_api_server {
+        script "/usr/bin/curl --silent --max-time 2 --insecure https://localhost:{{ api_server_port }}/healthz -o /dev/null"
+        rise 1
+        fall 1
+        init_fail
+      }
+
+      vrrp_instance api_server {
+        state MASTER
+        interface eth0
+        virtual_router_id 1
+        authentication {
+          auth_type PASS
+          auth_pass j9PGxdqG
+        }
+        virtual_ipaddress {
+          {{ keepalived_virtual_ipaddress }}
+        }
+        track_script {
+          check_api_server
+        }
+      }
+      EOF
+
+      sed -i "s/interface.*/interface $$(ip -4 route show default | cut -d ' ' -f5)/g" /etc/keepalived/keepalived.conf
+      exec keepalived --log-console --log-detail --no-syslog --dont-fork --dump-conf --dont-respawn
+    volumeMounts:
+    - name: lib-modules
+      mountPath: /lib/modules
+  volumes:
+  - name: lib-modules
+    hostPath:
+      path: /lib/modules
+      type: ""
+  hostNetwork: true
+  priorityClassName: system-node-critical
+

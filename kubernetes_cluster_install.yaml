@@ -1,0 +1,969 @@
+---
+- name: Create Kubernetes Cluster
+  hosts: all
+
+  tasks:
+          - include_vars: yamls/allvars.yml
+            tags:
+                  - always
+          - name: Print variable name
+            tags:
+                  - print_some_debug
+            debug:
+                    msg: "'ansible_user: ' {{ ansible_user }} , 'ansible_all_ipv4_addresses: ' {{ ansible_all_ipv4_addresses }}"
+            
+          # check if the cluster is configured before and take the necessary precautions
+          # this task is run always on the first master server
+          - name: Check if cluster is configured before
+            when: (inventory_hostname in groups['kubemaster1'])
+            tags:
+                    - always
+                    - check_cluster_status
+            block:
+                   - name: Check if kubectl is installed
+                     ansible.builtin.command: kubectl
+                     register: kubectl_output
+                     ignore_errors: yes
+
+                   - name: Get cluster info
+                     ansible.builtin.command: kubectl cluster-info   
+                     register: cluster_info
+                     ignore_errors: yes
+
+                   - name: Print cluster_info
+                     when: (cluster_info is defined)
+                     debug:
+                       msg: "cluster_info = {{ cluster_info.stdout }}"
+
+                   - name: Skip node installation if kubernetes is installed already
+                     debug:
+                       msg: "Kubernetes installation has been performed on these servers. No init/join will we performed on these servers!"
+                     when: cluster_info.rc == 0    
+                    
+                    #  - name: Stop installation if kubernetes is installed already!
+                    #    meta: end_play
+                    #    when: cluster_info.rc == 0                  
+
+                   - name: Print external variable
+                     debug:
+                       msg: "FORCE_KUBE_INSTALL = {{ FORCE_KUBE_INSTALL }}"
+                     when: FORCE_KUBE_INSTALL is defined
+
+                   - name: Stop installation if kubectl is installed and FORCE_KUBE_INSTALL is not set
+                     debug:
+                       msg: "kubectl command is running on master server. A kubernetes installation might have been done before.
+                            If you still want to move on with installation set FORCE_KUBE_INSTALL=1.
+                            Ex: ansible-playbook kubernetes_cluster_install.yaml -k --ask-vault-pass --extra-vars 'FORCE_KUBE_INSTALL=1'"
+                     when: (kubectl_output is defined and kubectl_output.rc == 0 and FORCE_KUBE_INSTALL is not defined) or 
+                           (kubectl_output is defined and kubectl_output.rc == 0 and FORCE_KUBE_INSTALL is defined and FORCE_KUBE_INSTALL != '1')
+                   
+                  #  - name: End play if kubectl is installed and FORCE_KUBE_INSTALL is not set
+                  #    meta: end_play
+                  #    when: ((kubectl_output.rc == 0) and FORCE_KUBE_INSTALL is not defined) or 
+                  #          ((kubectl_output.rc == 0) and FORCE_KUBE_INSTALL is defined and (FORCE_KUBE_INSTALL != '1')) 
+                        
+                   - name: Set empty fact for preventing undefined variable error
+                     set_fact:
+                                node_list_new: "{{ [] }}"
+
+                   - name: Get the node list with kubectl command
+                     when: (kubectl_output is defined and kubectl_output.rc == 0)
+                     block:
+                          - name: Get raw list
+                            shell: |
+                                    kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}'
+                            register: node_list
+                            ignore_errors: yes
+
+                          - name: Nodelist to list
+                            set_fact:
+                                      node_list_new: "{{ node_list.stdout | split() }}" 
+
+                          - name: Print node_list
+                            debug:
+                                msg: "node_list: {{ node_list.stdout }} - {{ node_list_new }}"
+
+          - name: Keep environment variables when using sudo
+            tags:
+                    - keep_environment_variables_for_sudo
+            become: yes
+            shell: |
+                    cat << EOF | tee /etc/sudoers.d/proxy
+                    Defaults env_keep += "*_proxy *_PROXY"
+                    EOF
+
+          # update os before moving ahead
+          - name: apt-get update
+            tags:
+                    - apt_get_update
+            become: yes
+            apt:
+                    update_cache: yes
+            #environment: "{{ proxy_env }}"
+            # if your servers don't have direct access to internet and access internet through proxy, uncomment the above line
+
+          - name: Remove useless packages from the cache after update
+            become: yes
+            apt:
+                    autoclean: yes
+
+          # after updating the servers, ask the user for server reboot approval
+          - name: Rebooting the servers if necessary
+            tags:
+                    - reboot_servers
+                    - never
+            become: yes
+            block:
+                - name: Ask the user for reboot approval
+                  pause:
+                      prompt: Do you want to reboot server {{ item }}? (y/n)
+                  register: check_reboot_server
+                  with_items: "{{ play_hosts }}"
+
+                - name: Set reboot facts for servers
+                  set_fact:
+                    reboot_server_result: "{{ item.user_input | string }}"
+                  with_items: "{{ hostvars[play_hosts.0].check_reboot_server.results }}"
+                  when: item.item == inventory_hostname    
+               
+                - name: Rebooting servers in action ...
+                  when: (hostvars[item]['reboot_server_result'] is defined) and
+                        (hostvars[item]['reboot_server_result'] == 'y') and
+                        (item == inventory_hostname)
+                  reboot:
+                    reboot_timeout: 1800
+                  with_items: "{{ play_hosts }}"
+
+          - name: Linux Docker installation
+            tags:
+                 - linux_docker_installation
+            become: yes
+            block:
+                  - name: Install necessary packages
+                    apt:
+                        update_cache: yes
+                        pkg:
+                            - ca-certificates
+                            - curl
+                            - gnupg 
+                            - lsb-release
+                    #environment: "{{ proxy_env }}"
+                    # if your servers don't have direct access to internet and access internet through proxy, uncomment the above line
+                  
+                  - name: Add docker's official gps key
+                    shell: |
+                             mkdir -p /etc/apt/keyrings
+                             rm -f /etc/apt/keyrings/docker.gpg
+                             curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                             echo \ 
+                                "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+                                $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                    #environment: "{{ proxy_env }}"
+                    # if your servers don't have direct access to internet and access internet through proxy, uncomment the above line
+
+                  - name: Install docker, containerd etc.
+                    apt:
+                        update_cache: yes
+                        pkg:
+                            - docker-ce={{ docker_package_version }}
+                            - docker-ce-cli={{ docker_package_version }}
+                            - docker-ce-rootless-extras={{ docker_package_version }}
+                            - docker-scan-plugin={{ docker_scanplugin_version }}
+                            - docker-compose-plugin={{ docker_composeplugin_version }}
+                            - containerd.io={{ containerd_package_version }}
+                    #environment: "{{ proxy_env }}"
+                    # if your servers don't have direct access to internet and access internet through proxy, uncomment the above line
+
+                  - name: Add docker group to sudo and create sym link
+                    shell: |                    
+                            usermod -aG docker {{ ansible_user }}
+
+                  - name: Create symbolic link
+                    ansible.builtin.file:
+                      src: /usr/libexec/docker/cli-plugins/docker-compose
+                      dest: /usr/local/bin/docker-compose
+                      owner: root
+                      group: root
+                      state: link
+  
+          - name: Create the docker daemon json file (/etc/docker/daemon.json)
+            become: yes
+            template:
+                      src: files/docker/daemon.json.j2
+                      dest: /etc/docker/daemon.json
+                      owner: root
+                      group: root
+                      mode: "0644"
+                      backup: yes
+
+          - name: Restart docker service
+            become: yes
+            shell: |
+                    service docker restart
+
+          - name: Docker login
+            tags:
+                    - docker_login
+            become: yes
+            shell: |
+                    docker login -u {{ kube_registry_service_user }} -p {{ kube_registry_service_password }} {{ kube_registry }}
+
+          - name: Configure containerd
+            tags:
+                    - configure_containerd
+            become: yes
+            block:
+                    - name: Default containerd operations
+                      shell: |
+                              mkdir -p /etc/containerd
+                              #containerd config default | tee /etc/containerd/config.toml
+                              mkdir -p /etc/systemd/system/containerd.service.d
+
+                    - name: Add lines to override.conf (1)
+                      lineinfile:
+                              path: /etc/systemd/system/containerd.service.d/override.conf
+                              line: "[Service]"
+                              state: present
+                              create: yes
+
+                    - name: Add lines to override.conf (2)
+                      lineinfile:
+                              path: /etc/systemd/system/containerd.service.d/override.conf
+                              line: "KillMode=mixed"
+                              state: present
+                              insertafter: "[Service]"
+                              create: yes
+
+                    - name: Apply Containerd config.toml Template
+                      template:
+                              src: files/containerd/containerd_config.toml.j2
+                              dest: /etc/containerd/config.toml
+                              owner: root
+                              group: root
+                              mode: "0644"
+                              backup: yes
+
+                    - name: Daemon reload and restart containerd
+                      shell: |
+                              systemctl daemon-reload
+                              sleep 3
+                              systemctl restart kubelet
+                              sleep 3
+                              systemctl restart containerd
+                              sleep 3
+
+          - name: Configure kernel modules and parameters for containerd and kubernetes
+            tags:
+                    - configure_kernel_modules
+            become: yes
+            shell: |
+                    cat <<EOF | tee /etc/modules-load.d/containerd.conf
+                    overlay
+                    br_netfilter
+                    EOF
+
+                    modprobe overlay
+                    modprobe br_netfilter
+
+                    # Setup required sysctl params, these persist across reboots.
+                    cat <<EOF | tee /etc/sysctl.d/99-kubernetes-cri.conf
+                    net.bridge.bridge-nf-call-iptables  = 1
+                    net.ipv4.ip_forward                 = 1
+                    net.bridge.bridge-nf-call-ip6tables = 1
+                    EOF
+
+                    # Apply sysctl params without reboot
+                    sysctl --system
+                    
+          - name: Install Kubernetes packages
+            become: yes
+            block:
+                    - name: Install necessary packages for docker
+                      apt:
+                              update_cache: yes
+                              pkg:
+                                  - apt-transport-https
+                      #environment: "{{ proxy_env }}"
+                      # if your servers don't have direct access to internet and access internet through proxy, uncomment the above line
+
+                    - name: Add apt-key
+                      shell: |
+                              curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+                              cat <<EOF | tee /etc/apt/sources.list.d/kubernetes.list
+                              deb https://apt.kubernetes.io/ kubernetes-xenial main
+                              EOF
+                      #environment: "{{ proxy_env }}"
+                      # if your servers don't have direct access to internet and access internet through proxy, uncomment the above line
+
+                    - name: Install kubelet, kubeadm, kubectl
+                      apt:
+                              update_cache: yes
+                              pkg:
+                                  - kubelet={{ kube_package_version }}
+                                  - kubeadm={{ kube_package_version }}
+                                  - kubectl={{ kube_package_version }}
+                      #environment: "{{ proxy_env }}"
+                      # if your servers don't have direct access to internet and access internet through proxy, uncomment the above line
+
+                    - name: Hold packages kubelet, kubeadm, kubectl, containerd, docker packages
+                      shell: |
+                              apt-mark hold kubelet kubeadm kubectl containerd.io docker-ce docker-ce-cli docker-ce-rootless-extras docker-scan-plugin docker-compose-plugin
+
+          - name: Install istio package
+            when: (inventory_hostname in groups['kubemaster1'])
+            tags:
+                  - install_istio
+            block:
+                  - name: Download and install istio
+                    shell: |
+                            curl -L https://istio.io/downloadIstio | ISTIO_VERSION={{ istio_version }} TARGET_ARCH=x86_64 sh -
+                    #environment: "{{ proxy_env }}"
+                    # if your servers don't have direct access to internet and access internet through proxy, uncomment the above line
+
+                  - name: Add istio to the PATH in .bashrc file
+                    tags:
+                          - add_istio_to_path
+                    become: yes
+                    blockinfile:
+                            dest: /home/{{ ansible_user }}/.bashrc
+                            backup: yes
+                            marker: "# {mark} ADD ISTIO TO PATH #"
+                            block: |
+                                  PATH="$PATH:/home/{{ ansible_user }}/istio-{{ istio_version }}/bin"
+          
+          - name: Configure kernel modules for k8
+            become: yes
+            shell: |
+                    cat <<EOF | tee /etc/modules-load.d/k8s.conf
+                    br_netfilter
+                    EOF
+
+                    cat <<EOF | tee /etc/sysctl.d/k8s.conf
+                    net.bridge.bridge-nf-call-ip6tables = 1
+                    net.bridge.bridge-nf-call-iptables = 1
+                    EOF
+
+                    sysctl --system
+
+          - name: Comment out swap
+            tags:
+                    - comment_out_swap
+            become: yes
+            replace:
+                    path: /etc/fstab
+                    regexp: '(^[^#{1,}].*)(swap\b)(.*)$'
+                    replace: '#\1\2\3'
+                    backup: yes
+
+          - name: Disable swap
+            tags:
+                    - disable_swap
+            become: yes
+            shell: |
+                    swapoff -a
+
+          - name: Configure Kernel parameters for large nodejs projects, running keepalived and elasticsearch
+            become: yes
+            shell: |
+                    cat <<EOF | tee /etc/sysctl.d/99-custom.conf
+                    net.ipv4.ip_nonlocal_bind=1
+                    net.ipv4.ip_forward=1
+                    fs.inotify.max_user_watches=524288
+                    vm.max_map_count=524288
+                    EOF
+
+                    sysctl --system
+          
+          # Configure crictl. If API server is down or a node is disconnected from the cluster you will need a tool to inspect and debug containers
+          - name: Configure crictl
+            tags:
+                    - configure_crictl
+            become: yes
+            template:
+                      src: files/containerd/crictl.yaml.j2
+                      dest: /etc/crictl.yaml
+                      owner: root
+                      group: root
+                      mode: "0644"
+                      backup: yes
+
+          - name: Kubectl and kubeadm command completion (only master servers)
+            when: (inventory_hostname in groups['masterservers']) or
+                  (inventory_hostname in groups['kubemaster1'])            
+            tags:
+                    - kube_command_completion
+            block:
+            - name: Add to bashrc
+              blockinfile:
+                path: ./.bashrc
+                marker: "# {mark} KUBE COMMAND COMPLETION #"
+                block: |
+                  source <(kubeadm completion bash)
+                  source <(kubectl completion bash)
+                  alias k=kubectl
+                  complete -F __start_kubectl k
+            
+            - name: Activate .bashrc
+              shell: |
+                      source ./.bashrc
+              args:
+                executable: /bin/bash
+
+          - name: Create the first node of the cluster with kubeadm init
+            when: >
+                  (inventory_hostname in groups['kubemaster1']) and
+                  not (hostvars[inventory_hostname]['ansible_all_ipv4_addresses'] | intersect(hostvars[groups['kubemaster1'][0]]['node_list_new']))
+            tags:
+                    - create_first_node
+            block:
+              - name: Create init dir
+                tags:
+                        - create_kubemaster_init_dir
+                file: 
+                  path: ./init
+                  state: directory
+
+              - name: Copy kubeadm-config.yaml
+                tags:
+                        - copy_kubeadm_config1
+                template:
+                        src: files/init/kubeadm-config.yaml.j2
+                        dest: ./init/kubeadm-config.yaml
+                        backup: yes
+              
+              # Before kubeadm init, copy haproxy config file under manifests directory
+              # This way, while kubernetes is bootstrapping, it will also bootstrap haproxy pod which is used for load balancing
+              # Later on, haproxy will manage the load balancing in between api servers.
+              # The same bootstrapping also applies to keepalived.
+              - name: Generate haproxy.yaml file
+                become: yes
+                tags:
+                            - generate_haproxy_file
+                template:
+                        src: files/ha/haproxy.yaml.j2
+                        dest: /etc/kubernetes/manifests/haproxy.yaml
+                        owner: root
+                        group: root
+                        mode: "0644"
+                        backup: yes
+
+              # Before kubeadm init copy the keepalived config file under manifests directory.
+              - name: Generate keepalived.yaml file
+                become: yes
+                tags:
+                      - generate_keepalived_file
+                template:
+                        src: files/ha/keepalived.yaml.j2
+                        dest: /etc/kubernetes/manifests/keepalived.yaml
+                        owner: root
+                        group: root
+                        mode: "0600"
+                        backup: yes
+              
+              - name: Kubeadm init
+                become: yes
+                shell: |
+                        kubeadm init --ignore-preflight-errors=NumCPU --config ./init/kubeadm-config.yaml --upload-certs -v 5
+                register: kubeadm_init_output
+
+              - name: Write kubeadm init output to file
+                block:
+                      - name: Generate file name
+                        set_fact:
+                          kubeadm_init_output_filename: ".kubeadm_init_output.txt"
+                
+                      - name: Copy output to file
+                        copy:
+                          content: "{{ kubeadm_init_output.stdout }}"
+                          dest: "{{ kubeadm_init_output_filename }}"
+
+              - name: Configure kubectl
+                tags:
+                      - configure_kubectl
+                become: yes
+                shell: |
+                        mkdir -p .kube
+                        cp /etc/kubernetes/admin.conf .kube/config
+                        chown -R {{ ansible_user_uid }}:{{ ansible_user_gid }} .kube
+
+          # deploy a network before moving ahead
+          - name: Install calico
+            when: (inventory_hostname in groups['kubemaster1'])
+            tags:
+                    - install_calico
+            block:
+              - name: Create calico dir
+                file: 
+                  path: ./calico
+                  state: directory
+              
+              - name: Copy tigera-operator.yaml
+                template:
+                        src: files/calico/tigera-operator.yaml.j2
+                        dest: ./calico/tigera-operator.yaml
+                        backup: yes
+                
+              - name: Apply tigera-operator.yaml file
+                shell: |
+                        kubectl apply -f ./calico/tigera-operator.yaml
+
+              - name: Copy calico.yaml
+                template:
+                        src: files/calico/calico.yaml.j2
+                        dest: ./calico/calico.yaml
+                        backup: yes
+                
+              - name: Apply calico.yaml file
+                shell: |
+                        kubectl apply -f ./calico/calico.yaml              
+
+          - name: Get necessary parameters from .kubeadm_init_output.txt
+            when: > 
+                  (inventory_hostname in groups['kubemaster1'])
+            tags:
+                  - get_parameters_from_kubeadm_init_output
+            block:
+                  - name: Check if .kubeadm_init_output.txt exists
+                    stat:
+                        path: ./.kubeadm_init_output.txt
+                    register: kubeadm_init_output_exists
+
+                  - name: Get token
+                    shell: |
+                             cat .kubeadm_init_output.txt | grep "\-\-token" | tail -1 | awk -F "--token" '{print $2}' | awk '{print $1}'
+                    register: master_token
+                    when: kubeadm_init_output_exists.stat.exists
+
+                  - name: Get discovery-token-ca-cert-hash
+                    shell: |
+                             cat .kubeadm_init_output.txt | grep "\-\-discovery-token-ca-cert-hash" | tail -1 | awk -F "--discovery-token-ca-cert-hash" '{print $2}' | awk '{print $1}' | awk -F"sha256:" '{print $2}'
+                    register: master_discovery_token_ca_cert_hash
+                    when: kubeadm_init_output_exists.stat.exists
+
+                  - name: Get certificate-key
+                    shell: |
+                            cat .kubeadm_init_output.txt | grep "\-\-certificate-key" | tail -1 | awk -F "--certificate-key" '{print $2}' | awk '{print $1}'
+                    register: master_control_plane_certificate_key
+                    when: kubeadm_init_output_exists.stat.exists
+
+          - name: Assign init/join parameters to other master hosts and worker nodes
+            when: >
+                  ((inventory_hostname in groups['masterservers']) or
+                  (inventory_hostname in groups['linuxworkerservers'])) and
+                  (hostvars[groups['kubemaster1'][0]]['kubeadm_init_output_exists'].stat.exists)
+            tags:
+                  - assign_init_join_parameters
+            set_fact:
+                    token: "{{ hostvars[groups['kubemaster1'][0]]['master_token'].stdout }}"
+                    discovery_token_ca_cert_hash: "{{ hostvars[groups['kubemaster1'][0]]['master_discovery_token_ca_cert_hash'].stdout }}"
+                    control_plane_certificate_key: "{{ hostvars[groups['kubemaster1'][0]]['master_control_plane_certificate_key'].stdout }}"
+
+          - name: Assign init/join paramaters if there is no .kubeadm_init_output.txt file
+            when: > 
+                  (inventory_hostname in groups['kubemaster1']) and
+                  (hostvars[groups['kubemaster1'][0]]['ansible_all_ipv4_addresses'] | intersect(hostvars[groups['kubemaster1'][0]]['node_list_new'])) and
+                  not (hostvars[groups['kubemaster1'][0]]['kubeadm_init_output_exists'].stat.exists)
+            tags:
+                  - assign_init_join_parameters2
+            block:       
+                - name: Kubeadm generate certificate-key
+                  tags:
+                        - generate_certificate_key
+                  become: yes
+                  shell: |
+                          kubeadm init phase upload-certs --upload-certs | tail -1 
+                  register: certificate_key             
+
+                - name: Kubeadm join command for other masters
+                  shell: |
+                          kubeadm token create --print-join-command --certificate-key {{ certificate_key.stdout }}
+                  register: master_join_command
+
+                - name: Print master join command
+                  debug:
+                    msg: "master_join_command: {{ master_join_command.stdout }}"
+
+                - name: Get kubeadm join parameters
+                  set_fact:
+                    master_token_2: "{{ master_join_command.stdout | regex_search('--token ([^\\s]*)', '\\1') | first }}"
+                    master_control_plane_certificate_key_2: "{{ master_join_command.stdout | regex_search('--certificate-key ([^\\s]*)', '\\1') | first }}"
+                    master_discovery_token_ca_cert_hash_2:  "{{ master_join_command.stdout | regex_search('--discovery-token-ca-cert-hash ([^\\s]*)', '\\1') | first | split(':') | last }}"
+      
+                - name: Print join paramaters
+                  debug:
+                    msg: "join parameters: {{ master_token_2 }},{{ master_control_plane_certificate_key_2 }},{{ master_discovery_token_ca_cert_hash_2 }},"
+
+          - name: Assign init/join parameters to other master hosts and worker nodes if there is no .kubeadm_init_output.txt file
+            when: >
+                  ((inventory_hostname in groups['masterservers']) or (inventory_hostname in groups['linuxworkerservers'])) and
+                  not (hostvars[groups['kubemaster1'][0]]['kubeadm_init_output_exists'].stat.exists)
+            tags:
+                  - assign_init_join_parameters3
+            set_fact:
+                    token: "{{ hostvars[groups['kubemaster1'][0]]['master_token_2'] }}"
+                    discovery_token_ca_cert_hash: "{{ hostvars[groups['kubemaster1'][0]]['master_discovery_token_ca_cert_hash_2'] }}"
+                    control_plane_certificate_key: "{{ hostvars[groups['kubemaster1'][0]]['master_control_plane_certificate_key_2'] }}"
+          
+          # other than master1, join master servers to kubemaster1 
+          - name: Kube join other master servers
+            tags:
+                  - kube_join_masters
+            when: > 
+                  (inventory_hostname in groups['masterservers']) and
+                  not (hostvars[inventory_hostname]['ansible_all_ipv4_addresses'] | intersect(hostvars[groups['kubemaster1'][0]]['node_list_new']))
+            become: yes
+            block:
+              # Before kubeadm join, copy haproxy config file under manifests directory
+              # This way, while kubernetes is bootstrapping, it will also bootstrap haproxy pod which is used for load balancing
+              # Later on, haproxy will manage the load balancing in between api servers.
+              # The same bootstrapping also applies to keepalived.
+              - name: Generate haproxy.yaml file
+                become: yes
+                tags:
+                            - generate_haproxy_file2
+                template:
+                        src: files/ha/haproxy.yaml.j2
+                        dest: /etc/kubernetes/manifests/haproxy.yaml
+                        owner: root
+                        group: root
+                        mode: "0600"
+                        backup: yes
+
+              # Before kubeadm join copy the keepalived config file under manifests directory.
+              - name: Generate keepalived.yaml file
+                become: yes
+                tags:
+                      - generate_keepalived_file2
+                template:
+                        src: files/ha/keepalived.yaml.j2
+                        dest: /etc/kubernetes/manifests/keepalived.yaml
+                        owner: root
+                        group: root
+                        mode: "0600"
+                        backup: yes  
+
+              - name: Create init dir
+                tags:
+                        - create_master_init_dir
+                file: 
+                  path: ./init
+                  state: directory
+
+              - name: Generate kubeadm-config.yaml file
+                tags:
+                      - generate_kubeadm_config_master
+                template:
+                        src: files/init/kubeadm-config.yaml.j2
+                        dest: ./init/kubeadm-config.yaml
+                        backup: yes  
+
+              - name: Kubeadm join master {{ inventory_hostname }}
+                become: yes
+                shell: |
+                        kubeadm join --config ./init/kubeadm-config.yaml -v 5
+
+              - name: Configure kubectl
+                become: yes
+                shell: |
+                        mkdir -p .kube
+                        cp /etc/kubernetes/admin.conf .kube/config
+                        chown -R {{ ansible_user_uid }}:{{ ansible_user_gid }} .kube
+
+          # After joining the new masters, in order for them to take load, we copy the haproxy.yaml file under manifests directory.
+          # Before this, we must add new master servers in the yamls/allvars.yml and ansible_hosts files.
+          - name: Push haproxy.yaml file to manifests directory of all masters after new masters added
+            become: yes
+            tags:
+                  - push_haproxy_to_all_masters
+            when: > 
+                  (inventory_hostname in groups['masterservers']) or
+                  (inventory_hostname in groups['kubemaster1'])
+            template:
+                    src: files/ha/haproxy.yaml.j2
+                    dest: /etc/kubernetes/manifests/haproxy.yaml
+                    owner: root
+                    group: root
+                    mode: "0600"
+                    backup: yes          
+          
+          # join linux workers into kubemaster1
+          - name: Kube join linux worker servers
+            tags:
+                  - kube_join_workers
+            when: > 
+                  (inventory_hostname in groups['linuxworkerservers']) and
+                  not (hostvars[inventory_hostname]['ansible_all_ipv4_addresses'] | intersect(hostvars[groups['kubemaster1'][0]]['node_list_new']))
+            become: yes
+            block:
+              - name: Create init dir
+                tags:
+                        - create_worker_init_dir
+                file: 
+                  path: ./init
+                  state: directory
+
+              - name: Generate kubeadm-config.yaml file
+                tags:
+                      - generate_kubeadm_config_worker
+                template:
+                        src: files/init/kubeadm-config.yaml.j2
+                        dest: ./init/kubeadm-config.yaml
+                        backup: yes  
+              
+              - name: Kubeadm join worker {{ inventory_hostname }}
+                become: yes
+                shell: |
+                        kubeadm join --config ./init/kubeadm-config.yaml -v 5     
+
+          # Test cluster, kubectl and crictl
+          - name: Test cluster, kubectl and crictl
+            tags: 
+                  - test_cluster
+            when: (inventory_hostname in groups['kubemaster1'])
+            block:
+              - name: Check with kubectl
+                shell: |
+                        kubectl get nodes
+                        kubectl get pods --all-namespaces
+                register: check_with_kubectl
+
+              - name: Check with crictl
+                become: yes
+                shell: |
+                        crictl pods # Run this command on each individual nodes.
+                register: check_with_crictl
+
+              - name: Check cluster with return codes
+                when: >
+                        (check_with_kubectl.rc == 0) and
+                        (check_with_crictl.rc == 0)
+                debug:
+                      msg: Cluster is installed successfully :)
+
+          - name: Install metallb
+            when: (inventory_hostname in groups['kubemaster1'])
+            tags:
+                    - install_metallb
+            block:
+              - name: Create metallb dir
+                tags:
+                        - create_metallb_dir
+                file: 
+                  path: ./metallb
+                  state: directory
+              
+              - name: Copy namespace.yaml
+                template:
+                        src: files/metallb/namespace.yaml.j2
+                        dest: ./metallb/namespace.yaml
+                        backup: yes
+                
+              - name: Apply namespace.yaml file
+                shell: |
+                        kubectl apply -f ./metallb/namespace.yaml
+
+              - name: Copy metallb.yaml
+                template:
+                        src: files/metallb/metallb.yaml.j2
+                        dest: ./metallb/metallb.yaml
+                        backup: yes
+                
+              - name: Apply metallb.yaml file
+                shell: |
+                        kubectl apply -f ./metallb/metallb.yaml
+                
+              - name: Check if memberlist secret exists
+                shell: |
+                        kubectl get secrets memberlist -n metallb-system
+                register: memberlist_secret
+                ignore_errors: yes
+              
+              - name: Metallb create secret
+                when: (memberlist_secret is not defined or memberlist_secret.rc != 0)
+                shell: |
+                        kubectl create secret generic -n metallb-system memberlist --from-literal=secretkey="$(openssl rand -base64 128)"  
+
+              - name: Copy metallb-layer2.yaml
+                tags:
+                        - metallb_apply_layer2
+                template:
+                        src: files/metallb/metallb-layer2.yaml.j2
+                        dest: ./metallb/metallb-layer2.yaml
+                        backup: yes
+                
+              - name: Apply metallb-layer2.yaml file
+                shell: |
+                        kubectl apply -f ./metallb/metallb-layer2.yaml
+
+          # ingress will route incoming traffic to services based on URL
+          - name: Install ingress controller
+            when: (inventory_hostname in groups['kubemaster1'])
+            tags:
+                  - install_ingress_controller
+            block:
+              - name: Create ingress-nginx dir
+                tags:
+                        - create_ingress_nginx_dir
+                file: 
+                  path: ./ingress-nginx
+                  state: directory
+
+              - name: Copy ingress nginx controller yaml file
+                tags:
+                        - copy_ingress_nginx_yaml
+                template:
+                        src: files/ingress-nginx/ingress-nginx.yaml.j2
+                        dest: ./ingress-nginx/ingress-nginx.yaml
+                
+              - name: Apply ingress-nginx.yaml file
+                tags:
+                      - apply_ingress_nginx
+                shell: |
+                        kubectl apply -f ./ingress-nginx/ingress-nginx.yaml
+          
+          - name: Install and configure istio
+            when: (inventory_hostname in groups['kubemaster1'])
+            tags:
+                  - install_and_configure_istio
+            block:
+                - name: Create istio dir
+                  tags:
+                          - create_istio_dir
+                  file: 
+                    path: ./istio
+                    state: directory
+                
+                - name: Copy istio-operator yaml file
+                  tags:
+                          - copy_istio_operator_yaml
+                  template:
+                          src: files/istio/istio-operator.yaml.j2
+                          dest: ./istio/istio-operator.yaml
+                
+                - name: Generate the kubernetes istio manifest file
+                  shell: |
+                          istioctl manifest generate -f ./istio/istio-operator.yaml --set hub={{ istio_registry }} --set tag={{ istio_version }} > ./istio/istio-kubernetes.yml
+                  environment:
+                    PATH: /home/{{ ansible_user }}/istio-{{ istio_version }}/bin:{{ ansible_env.PATH }}
+
+                - name: Create Namespace for istio-system
+                  shell: |
+                      kubectl apply -f - <<EOF
+                      apiVersion: v1
+                      kind: Namespace
+                      metadata:
+                        name: istio-system
+                      EOF
+                
+                - pause: seconds=3
+
+                - name: Apply istio-operator.yaml file
+                  ignore_errors: yes
+                  shell: |
+                        kubectl apply -f ./istio/istio-kubernetes.yml
+
+                - pause: seconds=3
+                  
+                # Apply the file second time, because some of the componenets are not applied in the first time because of some dependencies
+                - name: Apply istio-operator.yaml file 2nd time   
+                  shell: | 
+                        kubectl apply -f ./istio/istio-kubernetes.yml
+          
+          - name: Install Kubernetes Dashboard and Metrics server
+            when: (inventory_hostname in groups['kubemaster1'])
+            tags:
+                  - install_kubernetes_dashboard
+            block:
+              - name: Create dashboard dir
+                tags:
+                        - create_dashboard_dir
+                file: 
+                  path: ./dashboard
+                  state: directory
+
+              - name: Copy dashboard yaml file
+                tags:
+                        - copy_dashboard_yaml
+                template:
+                        src: files/dashboard/kubernetes-dashboard.yaml.j2
+                        dest: ./dashboard/kubernetes-dashboard.yaml
+                
+              - name: Apply kubernetes-dashboard.yaml file
+                tags:
+                      - apply_dashboard
+                shell: |
+                        kubectl apply -f ./dashboard/kubernetes-dashboard.yaml
+
+              - name: Copy metrics-server yaml file
+                tags:
+                        - copy_metrics_server_yaml
+                template:
+                        src: files/dashboard/metrics-server.yaml.j2
+                        dest: ./dashboard/metrics-server.yaml
+                
+              - name: Apply metrics-server.yaml file
+                tags:
+                      - apply_metrics_server
+                shell: |
+                        kubectl apply -f ./dashboard/metrics-server.yaml
+
+              - name: Create dashboard admin token
+                tags:
+                      - create_dashboard_admin_token
+                block:
+                  - name: Copy dashboard admin yaml file
+                    tags:
+                        - copy_dashboard_admin_yaml
+                    template:
+                        src: files/dashboard/dashboard-admin.yaml.j2
+                        dest: ./dashboard/dashboard-admin.yaml
+
+                  - name: Apply dashboard-admin.yaml
+                    tags:
+                          - apply_dashboard_admin
+                    shell: |
+                            kubectl apply -f ./dashboard/dashboard-admin.yaml
+
+                  - name: Get admin token
+                    tags:
+                          - get_admin_token
+                    shell: |
+                            kubectl describe secret -n kube-system $(kubectl -n kube-system get secret | (grep admin || echo "$_") | awk '{print $1}') | grep token: | awk '{print $2}'
+                    register: dashboard_admin_token
+                  
+                  - name: Write admin token to file
+                    tags:
+                          - write_dashboard_admin_token
+                    copy:
+                          content: "{{ dashboard_admin_token.stdout }}"
+                          dest: ".dashboard_admin_token.txt"
+
+          - name: Test servers
+            when: (inventory_hostname in groups['masterservers'])
+            tags:
+                 - test_servers
+                 - never
+            block:
+                - name: Do you want to test servers?
+                  pause:
+                      prompt: Do you want to test server {{ item }}? (y/n)
+                  register: if_test_server
+                  with_items: "{{ play_hosts }}"
+
+                - name: Set facts
+                  set_fact:
+                    test_server_result: "{{ item.user_input | string }}"
+                  with_items: "{{ hostvars[play_hosts.0].if_test_server.results }}"
+                  when: item.item == inventory_hostname    
+               
+                - name: Test servers
+                  when: > 
+                     (hostvars[item]['test_server_result'] is defined) and
+                     (hostvars[item]['test_server_result'] == 'y') and
+                     (item == inventory_hostname) and
+                     (hostvars[item]['ansible_all_ipv4_addresses'] | intersect(hostvars[groups['kubemaster1'][0]]['node_list_new']))
+                  # shell: |
+                  #         ls -lrt .
+                  debug:
+                    msg:  "{{ inventory_hostname }} : {{ hostvars[groups['kubemaster1'][0]]['node_list_new'] }}"        
+                  with_items: "{{ play_hosts }}"

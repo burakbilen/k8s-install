@@ -1,0 +1,57 @@
+kind: InitConfiguration
+apiVersion: kubeadm.k8s.io/v1beta2
+nodeRegistration:
+  criSocket: {{ cri_socket }}
+
+---
+
+kind: ClusterConfiguration
+apiVersion: kubeadm.k8s.io/v1beta2
+controlPlaneEndpoint: "{{ control_plane_endpoint }}"
+kubernetesVersion: {{ kubernetes_version }}
+apiServer:
+  extraArgs:
+    service-node-port-range: {{ service_node_port_range }}
+controllerManager:
+  extraArgs:
+    bind-address: {{ bind_address }}
+scheduler:
+  extraArgs:
+    bind-address: {{ bind_address }}
+networking:
+  serviceSubnet: "{{ service_subnet }}"
+  podSubnet: "{{ pod_subnet }}"
+imageRepository: {{ image_repository }}
+
+---
+
+kind: KubeletConfiguration
+apiVersion: kubelet.config.k8s.io/v1beta1
+cgroupDriver: systemd
+
+# kind: KubeProxyConfiguration
+# apiVersion: kubeproxy.config.k8s.io/v1alpha1
+# featureGates:
+#   IPv6DualStack: false
+#
+# ---
+
+# ilk master disindaki master'lari ve worker'lari join et
+{% if (inventory_hostname not in groups['kubemaster1']) %}
+---
+
+kind: JoinConfiguration
+apiVersion: kubeadm.k8s.io/v1beta2
+nodeRegistration:
+  criSocket: {{ cri_socket }}
+discovery:
+  bootstrapToken:
+    token: {{ token }}
+    apiServerEndpoint: "{{ api_server_endpoint }}"
+    caCertHashes:
+    - sha256:{{ discovery_token_ca_cert_hash }}
+{% if (inventory_hostname in groups['masterservers']) %}
+controlPlane:
+  certificateKey: {{ control_plane_certificate_key }}
+{% endif %}
+{% endif %}

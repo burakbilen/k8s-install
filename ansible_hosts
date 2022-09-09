@@ -1,0 +1,21 @@
+# This is a custom ansible 'hosts' file.
+#
+
+# kubemaster1 is the first master server of every cluster, should be defined like below in every ansible_hosts file
+# There is only one kubemaster1 server 
+# kubeuser is the ssh user which is used to connect to the servers in the cluster
+# master and worker servers are ubuntu 20.04 servers
+
+[kubemaster1]
+kubetestm1.local ansible_connection=ssh        ansible_user=kubeuser
+
+# master servers other than kubemaster1
+[masterservers]
+kubetestm2.local ansible_connection=ssh        ansible_user=kubeuser
+kubetestm3.local ansible_connection=ssh        ansible_user=kubeuser
+
+[linuxworkerservers]
+kubetestw1.local ansible_connection=ssh        ansible_user=kubeuser
+kubetestw2.local ansible_connection=ssh        ansible_user=kubeuser
+kubetestw3.local ansible_connection=ssh        ansible_user=kubeuser
+

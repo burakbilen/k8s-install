@@ -1,0 +1,15 @@
+{
+    "insecure-registries": ["{{ kube_registry }}"],
+    "default-address-pools": [
+    {
+        "base": "{{ docker_base_address }}",
+        "size": 28
+    }
+    ],
+    "exec-opts": ["native.cgroupdriver=systemd"],
+    "log-driver": "json-file",
+    "log-opts": {
+    "max-size": "10m",
+    "max-file": "5"
+    }
+}

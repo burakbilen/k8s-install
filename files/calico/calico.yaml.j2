@@ -1,0 +1,26 @@
+kind: IPAMConfig
+apiVersion: crd.projectcalico.org/v1
+metadata:
+  name: default
+spec:
+  autoAllocateBlocks: true
+  strictAffinity: true
+
+---
+
+kind: Installation
+apiVersion: operator.tigera.io/v1
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    bgp: Disabled
+    ipPools:
+      - cidr: {{ pod_subnet }}
+        encapsulation: VXLAN
+        blockSize: 26
+    nodeAddressAutodetectionV4:
+      firstFound: false
+      interface: {{ calico_interface }}
+  registry: {{ calico_image }}
+
